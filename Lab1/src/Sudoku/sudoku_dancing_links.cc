@@ -2,6 +2,7 @@
 #include <memory.h>
 #include <map>
 #include <vector>
+// #include <stdio.h>
 
 #include "sudoku.h"
 using namespace std;
@@ -250,10 +251,28 @@ struct Dance
         old->size++;
         nnew->col = old;
     }
+
+    void get_answer(char *ch)
+    {
+        for(int i = 0; i < N; i ++)
+            ch[i] = inout_[i] + '0';
+    }
 };
 
-bool solve_sudoku_dancing_links(int unused)
+// void print_ch(char* ch)
+// {
+//     printf("From function -print_ch    -:\n");
+//     for(int i = 0; i < N; i ++)
+//         printf("%c", ch[i]);
+//     printf("\n");
+// }
+
+bool solve_sudoku_dancing_links(char* ch)
 {
   Dance d(board);
-  return d.solve();
+  bool over = d.solve();
+  // d.print_answer();
+  d.get_answer(ch);
+//   print_ch(ch);
+  return true;
 }

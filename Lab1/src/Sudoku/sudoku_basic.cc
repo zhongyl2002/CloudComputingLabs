@@ -22,7 +22,11 @@ static void find_spaces()
 void input(const char in[N])
 {
   for (int cell = 0; cell < N; ++cell) {
-    board[cell] = in[cell] - '0';
+    // board[cell] = in[cell] - '0';
+    // if(0 <= board[cell] && board[cell] <= NUM)
+    // {
+    //   printf("Error element : board[%d] = %d\n", cell, board[cell]);
+    // }
     assert(0 <= board[cell] && board[cell] <= NUM);
   }
   find_spaces();
