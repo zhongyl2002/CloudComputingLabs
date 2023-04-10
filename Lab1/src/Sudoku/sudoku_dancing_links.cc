@@ -270,7 +270,7 @@ struct Dance
 bool solve_sudoku_dancing_links(char* ch)
 {
   Dance d(board);
-  bool over = d.solve();
+  d.solve();
   // d.print_answer();
   d.get_answer(ch);
 //   print_ch(ch);
