@@ -27,29 +27,30 @@ struct queue
     pthread_cond_t queueFull;
     pthread_mutex_t queueMutex;
     int* todoWorkList;
-    int todoWorkNum, todoWorkBegin, id;
-
-    queue()
-    {
-        pthread_cond_init(&queueFull, NULL);
-        pthread_mutex_init(&queueMutex, NULL);
-        todoWorkList = (int*)malloc(workPerThread * sizeof(int));
-        todoWorkNum = 0, todoWorkBegin = 0;
-        if(debug) printf("queue init ok\n");
-        fflush(stdout);
-    }
-    ~queue()
-    {
-        pthread_cond_destroy(&queueFull);
-        pthread_mutex_destroy(&queueMutex);
-        free(todoWorkList);
-    }
+    int todoWorkBegin, todoWorkEnd, id;
 };
+
+void queueNodeInit(queue& tmp)
+{
+    pthread_cond_init(&tmp.queueFull, NULL);
+    pthread_mutex_init(&tmp.queueMutex, NULL);
+    tmp.todoWorkList = (int*)malloc(workPerThread * sizeof(int));
+    tmp.todoWorkEnd = 0, tmp.todoWorkBegin = 0;
+    if(debug) printf("queue init ok\n");
+    fflush(stdout);
+}
+
+void queueNodeDes(queue& tmp)
+{
+    pthread_cond_destroy(&tmp.queueFull);
+    pthread_mutex_destroy(&tmp.queueMutex);
+    free(tmp.todoWorkList);
+}
 
 // 文件相关变量
 char fileNameBuffer[files][fileChars];
 char fileName[fileChars];
-int fileBegin, 
+int fileBegin,
     fileEnd;
 bool fileOver = false;
 
@@ -65,17 +66,18 @@ int problemBegin,
     problemEnd, 
     problemTotal, 
     problemSolved;
+bool problemOver = false;
 
 
 // 任务分配
 int problemDistributeBegin;
+bool distributeOver = false;
 
 
 // 线程pid
 pthread_t getFNT, 
           readFT, 
           printRT, 
-          testT, 
           distributeT;
 pthread_t* workerT;
 
@@ -84,14 +86,15 @@ pthread_cond_t problemFull,
                problemEmpty;
 
 pthread_mutex_t workerMutex;
-pthread_cond_t workerFull, 
-               workerEmpty;
+pthread_mutex_t fileOverM, problemOverM, distributeOverM;
+
+// 工作线程
+queue* threadQueue;
 
 
 // 配置数据
 int cores, 
     threadNum;
-queue* threadQueue;
 
 void* getFileName(void* args)
 {
@@ -109,7 +112,7 @@ void* getFileName(void* args)
                 fflush(stdout);
             pthread_cond_wait(&fileEmpty, &fileMutex);
         }
-        strncpy(fileNameBuffer[fileEnd], fileName, fileChars - 1);
+        strncpy(fileNameBuffer[fileEnd], fileName, fileChars);
         if(debug)printf("getFNT:\treceive file[%d]:%s\n", fileEnd, fileNameBuffer[fileEnd]);
         fflush(stdout);
         fileEnd = (fileEnd + 1) % files;
@@ -117,9 +120,11 @@ void* getFileName(void* args)
         pthread_cond_broadcast(&fileFull);
         pthread_mutex_unlock(&fileMutex);
     }
-    pthread_mutex_lock(&fileMutex);
+    pthread_mutex_lock(&fileOverM);
     fileOver = true;
-    pthread_mutex_unlock(&fileMutex);
+    printf("getFileName over!\n");
+    fflush(stdout);
+    pthread_mutex_unlock(&fileOverM);
     return NULL;
 }
 
@@ -132,10 +137,21 @@ void* readFile(void* args)
         if(debug)printf("in readFile Thread while!\n");
         fflush(stdout);
         pthread_mutex_lock(&fileMutex);
-        if(fileOver)
+        pthread_mutex_lock(&fileOverM);
+        if(fileOver && fileBegin == fileEnd)
         {
             pthread_mutex_unlock(&fileMutex);
+            pthread_mutex_unlock(&fileOverM);
+            pthread_mutex_lock(&problemOverM);
+            problemOver = true;
+            pthread_mutex_unlock(&problemOverM);
+            printf("readFile Over!\n");
+            fflush(stdout);
             break;
+        }
+        else
+        {
+            pthread_mutex_unlock(&fileOverM);
         }
         while(fileBegin == fileEnd)
         {
@@ -155,21 +171,17 @@ void* readFile(void* args)
         {
             // 读文件每行末尾的'\n'
             // int tmp = read(fd, &endLine, 1);
-            printf("pb = %d, pe = %d, tmp = %d, judge = %d\n", 
-                    problemBegin, problemEnd, 
-                    (problemEnd + 1) % problemNum, problemBegin == ((problemEnd + 1) % problemNum));
-            while((problemEnd + 1) % problemNum == problemBegin);   // 问题满
+            while((problemEnd + 1) % problemNum == problemBegin)   // 问题满
             {
                 printf("PB full\n");fflush(stdout);
                 pthread_cond_wait(&problemEmpty, &problemMutex);
             }
-            printf("Hello\n");fflush(stdout);
             if(read(fd, problem[problemEnd], 82) > 0 
                 && problem[problemBegin][0] != '\n')
             {
                 if(debug)printf("readFT:\treceive problem %d\n", problemEnd);
                     fflush(stdout);
-                for(int i = 0; i < strlen(problem[problemEnd]); i ++)
+                for(int i = 0; i < int(strlen(problem[problemEnd])); i ++)
                     printf("%c", problem[problemEnd][i]);
                 printf("\n");
                 fflush(stdout);
@@ -184,7 +196,7 @@ void* readFile(void* args)
         }
         pthread_mutex_unlock(&problemMutex);
 
-        fileBegin = (++fileBegin) % files;
+        fileBegin = (fileBegin + 1) % files;
 
         pthread_cond_broadcast(&fileEmpty);
         pthread_mutex_unlock(&fileMutex);
@@ -194,7 +206,76 @@ void* readFile(void* args)
 
 void* distribute(void* args)
 {
-    
+    if(debug)
+    {
+        printf("in distributeT\n");
+        fflush(stdout);
+    }
+    int ii = 0;
+    while(1)
+    {
+        if(debug)
+        {
+            // printf("in distributeT while\n");
+            fflush(stdout);
+        }
+        pthread_mutex_lock(&problemMutex);
+        pthread_mutex_lock(&problemOverM);
+        if(problemOver && problemDistributeBegin == problemEnd)
+        {
+            if(debug)
+            {
+                printf("distribute over!\n");
+                fflush(stdout);
+            }
+            pthread_mutex_unlock(&problemMutex);
+            pthread_mutex_unlock(&problemOverM);
+            pthread_mutex_lock(&distributeOverM);
+            distributeOver = true;
+            pthread_mutex_unlock(&distributeOverM);
+            // 离开前最后以此唤醒所有线程
+            for(int i = 0; i < threadNum; i ++)
+            {
+                pthread_cond_signal(&threadQueue[i].queueFull);
+            }
+            break;
+        }
+        else
+        {
+            pthread_mutex_unlock(&problemOverM);
+        }
+        fflush(stdout);
+        while(problemBegin == problemEnd)
+        {
+            if(debug)
+            {
+                printf("distributT waiting!\n");
+                fflush(stdout);
+            }
+            pthread_cond_wait(&problemFull, &problemMutex);
+        }
+        // 考虑释放问题的锁？
+
+        pthread_mutex_lock(&threadQueue[ii].queueMutex);
+        queue& tmp = threadQueue[ii];
+        if(debug)
+        {
+            printf("Assign work[%d] to worker[%d]\n", problemDistributeBegin, ii);
+        }
+        
+        assert(tmp.todoWorkEnd >= 0 && tmp.todoWorkEnd < workPerThread && "out todoWorkList\n");
+        assert(problemDistributeBegin >= 0 && problemDistributeBegin < problemNum && "out pro list\n");
+        
+        tmp.todoWorkList[tmp.todoWorkEnd] = problemDistributeBegin;
+        tmp.todoWorkEnd = (tmp.todoWorkEnd + 1) % workPerThread;
+        problemDistributeBegin = (problemDistributeBegin + 1) % problemNum;
+        ii = (ii + 1) % threadNum;
+        pthread_cond_signal(&tmp.queueFull);
+        pthread_mutex_unlock(&tmp.queueMutex);
+
+        pthread_cond_signal(&problemEmpty);
+        pthread_mutex_unlock(&problemMutex);
+    }
     return NULL;
 }
 
@@ -206,36 +287,64 @@ void* distribute(void* args)
 void* worker(void* args)
 {
     int id = *(int*)args;
-    if(debug) printf("in worker thread\n");
+    if(debug)
+    {
+        printf("in worker thread[%d]\n", id);
         fflush(stdout);
-    init_neighbors();
+    }
     while(1)
     {
-        if(debug) printf("in worker thread while\n");
-        fflush(stdout);
-        pthread_mutex_lock(&threadQueue[id].queueMutex);
-        while(threadQueue[id].todoWorkNum == 0)
+        if(debug)
         {
-            if(debug) printf("in worker thread wait\n");
-        fflush(stdout);
-            pthread_cond_wait(&threadQueue[id].queueFull, &threadQueue[id].queueMutex);
+            printf("in worker thread[%d] while\n", id);
+            fflush(stdout);
         }
-        int pos = threadQueue[id].todoWorkBegin;
-        int problemPos = threadQueue[id].todoWorkList[pos];
-        if(debug) printf("woker[%d]:get problem %d\n", id, problemPos);
-        fflush(stdout);
-        input(problem[problemPos]);
-        solve_sudoku_dancing_links(problem[problemPos]);
-        threadQueue[id].todoWorkBegin = (threadQueue[id].todoWorkBegin + 1) % workPerThread;
-        threadQueue[id].todoWorkNum --;
-        pthread_mutex_unlock(&threadQueue[id].queueMutex);
+        queue& tmp = threadQueue[id];
+        pthread_mutex_lock(&tmp.queueMutex);
+        pthread_mutex_lock(&distributeOverM);
+        if(tmp.todoWorkBegin == tmp.todoWorkEnd && distributeOver)
+        {
+            if(debug)
+            {
+                printf("worker[%d] over\n", id);
+                fflush(stdout);
+            }
+            pthread_mutex_unlock(&tmp.queueMutex);
+            pthread_mutex_unlock(&distributeOverM);
+            break;
+        }
+        else
+        {
+            pthread_mutex_unlock(&distributeOverM);
+        }
+        while (tmp.todoWorkBegin == tmp.todoWorkEnd)
+        {
+            if(debug)
+            {
+                printf("in worker thread[%d] wait\n", id);
+                fflush(stdout);
+            }
+            pthread_cond_wait(&tmp.queueFull, &tmp.queueMutex);
+        }
+        int pp = tmp.todoWorkList[tmp.todoWorkBegin];
+        if(debug)
+        {
+            printf("woker[%d]:get problem %d\n", id, pp);
+            fflush(stdout);
+        }
+        input(problem[pp]);
+        solve_sudoku_dancing_links(problem[pp]);
+        tmp.todoWorkBegin = (tmp.todoWorkBegin + 1) % workPerThread;
+        pthread_mutex_unlock(&tmp.queueMutex);
 
-        pthread_mutex_lock(&problemMutex);
+        pthread_mutex_lock(&workerMutex);
         problemSolved ++;
-        pthread_mutex_unlock(&problemMutex);
+        if(debug)
+        {
+            printf("worker[%d] solve problem[%d]\n", id, pp);
+        }
+        pthread_mutex_unlock(&workerMutex);
     }
-    if(debug) printf("worker over!\n");
-    fflush(stdout);
     return NULL;
 }
 
@@ -251,31 +360,34 @@ void init()
     pthread_cond_init(&problemEmpty, NULL);
     pthread_mutex_init(&problemMutex, NULL);
 
-    pthread_cond_init(&workerFull, NULL);
-    pthread_cond_init(&workerEmpty, NULL);
     pthread_mutex_init(&workerMutex, NULL);
 
+    pthread_mutex_init(&fileOverM, NULL);
+    pthread_mutex_init(&problemOverM, NULL);
+    pthread_mutex_init(&distributeOverM, NULL);
+
     threadQueue = (queue*)malloc(threadNum * sizeof(queue));
-    
+    assert(threadQueue != NULL);
+    for(int i = 0; i < threadNum; i ++)
+    {
+        queueNodeInit(threadQueue[i]);
+    }
+
+    init_neighbors();
+
     if(debug) printf("init function OK\n");
         fflush(stdout);
 }
 
-void waitForAllJobsDone()
+void print()
 {
-    //Lazily wait all the worker threads finish their wget jobs
-    while(1)
+    for(int i = 0; i <= 15; i ++)
     {
-        if(debug)printf("waitT:\tin waitT!\n");
-        fflush(stdout);
-        usleep(10000);//Check per 10 ms
-        pthread_mutex_lock(&fileMutex);
-        if(problemTotal == problemSolved && problemTotal != 0)//All jobs done
+        for(int j = 0; j < 81; j ++)
         {
-            pthread_mutex_unlock(&fileMutex);
-            break;
+            printf("%c",  problem[i][j]);
         }
-        pthread_mutex_unlock(&fileMutex);
+        printf("\n");
     }
 }
 
@@ -283,8 +395,10 @@ int main()
 {
     cores = get_nprocs();
     if(debug)
+    {
         printf("Available cores in the machine : %d\n", cores);
         fflush(stdout);
+    }
     fflush(stdout);
 
     init();
@@ -303,15 +417,13 @@ int main()
         exit(1);
     }
 
-/*
     if(pthread_create(&distributeT, NULL, distribute, NULL) != 0)
     {
         printf("fail to create distributeT\n");
         fflush(stdout);
         exit(1);
     }
-*/
-/*
+
     for(int i = 0; i < threadNum; i ++)
     {
         threadQueue[i].id = i;
@@ -322,10 +434,16 @@ int main()
             exit(1);
         }
     }
-*/
+
     pthread_join(getFNT, NULL);
     pthread_join(readFT, NULL);
-    // waitForAllJobsDone();
+    pthread_join(distributeT, NULL);
+    for(int i = 0; i < threadNum; i ++)
+    {
+        queueNodeDes(threadQueue[i]);
+    }
+
+    print();
 
     if(debug) printf("main over!\n");
 
