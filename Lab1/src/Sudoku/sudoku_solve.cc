@@ -117,6 +117,7 @@ void* getFileName(void* args)
         fflush(stdout);
     }
     // TODO:改善读入方法
+    // before:fgets(fileName, 100, stdin) != NULL
     while(scanf("%s", fileName) != EOF)
     {
         if(debug)
@@ -464,12 +465,14 @@ void* print(void*)
 
         if(problemStatus[printBegin])
         {
-            for(int i = 0; i < 81; i ++)
-            {
-                printf("%c", problem[printBegin][i]);
-            }
-            printf("\n");
-            fflush(stdout);
+            write(STDOUT_FILENO, problem[printBegin], 81);
+            write(STDOUT_FILENO, "\n", 1);
+            // for(int i = 0; i < 81; i ++)
+            // {
+            //     printf("%c", problem[printBegin][i]);
+            // }
+            // printf("\n");
+            // fflush(stdout);
             problemStatus[printBegin] = false;
             printBegin = (printBegin + 1) % problemNum;
         }
