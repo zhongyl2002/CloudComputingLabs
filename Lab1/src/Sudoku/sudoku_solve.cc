@@ -16,8 +16,8 @@
 
 using namespace std;
 
-const int problemNum = 1000000,
-          workPerThread = 50,
+const int problemNum = 10000,
+          workPerThread = 500,
           files = 8,
           fileChars = 100, 
           boardSize = 81;
@@ -153,6 +153,10 @@ void* getFileName(void* args)
         fflush(stdout);
     }
     pthread_mutex_unlock(&fileOverM);
+
+    pthread_mutex_lock(&fileMutex);
+    pthread_cond_broadcast(&fileFull);
+    pthread_mutex_unlock(&fileMutex);
     return NULL;
 }
 
@@ -171,27 +175,30 @@ void* readFile(void* args)
             fflush(stdout);
         }
         pthread_mutex_lock(&fileMutex);
-        pthread_mutex_lock(&fileOverM);
-        if(fileOver && fileBegin == fileEnd)
-        {
-            pthread_mutex_unlock(&fileMutex);
-            pthread_mutex_unlock(&fileOverM);
-            pthread_mutex_lock(&problemOverM);
-            problemOver = true;
-            pthread_mutex_unlock(&problemOverM);
-            if(debug)
-            {
-                printf("readFile Over!\n");
-                fflush(stdout);
-            }
-            break;
-        }
-        else
-        {
-            pthread_mutex_unlock(&fileOverM);
-        }
         while(fileBegin == fileEnd)
         {
+            pthread_mutex_lock(&fileOverM);
+            if(fileOver)
+            {
+                pthread_mutex_unlock(&fileMutex);
+                pthread_mutex_unlock(&fileOverM);
+                pthread_mutex_lock(&problemOverM);
+                problemOver = true;
+                pthread_mutex_unlock(&problemOverM);
+                if(debug)
+                {
+                    printf("readFile Over!\n");
+                    fflush(stdout);
+                }
+                pthread_mutex_lock(&problemMutex);
+                pthread_cond_broadcast(&problemFull);
+                pthread_mutex_unlock(&problemMutex);
+                return NULL;
+            }
+            else
+            {
+                pthread_mutex_unlock(&fileOverM);
+            }
             if(debug)
             {
                 printf("readFileT waiting!\n");
@@ -225,7 +232,7 @@ void* readFile(void* args)
             {
                 if(debug)
                 {
-                    printf("readFT:\treceive problem %d\n", problemEnd);
+                    printf("readFT:\treceive problem %d\n", problemTotal);
                     fflush(stdout);
                     for(int i = 0; i < int(strlen(problem[problemEnd])); i ++)
                         printf("%c", problem[problemEnd][i]);
@@ -245,7 +252,6 @@ void* readFile(void* args)
 
         fileBegin = (fileBegin + 1) % files;
 
-        pthread_cond_broadcast(&fileEmpty);
         pthread_mutex_unlock(&fileMutex);
     }
     return NULL;
@@ -272,17 +278,18 @@ void* distribute(void* args)
             pthread_mutex_lock(&problemOverM);
             if(problemOver)
             {
-                if(debug)
-                {
-                    printf("distribute over!\n");
-                    fflush(stdout);
-                }
                 pthread_mutex_unlock(&problemMutex);
                 pthread_mutex_unlock(&problemOverM);
                 pthread_mutex_lock(&distributeOverM);
                 distributeOver = true;
                 pthread_mutex_unlock(&distributeOverM);
                 // 离开前最后以此唤醒所有线程
+                if(debug)
+                {
+                    printf("distribute over!\n");
+                    printf("distributeOver = %d\n", distributeOver);
+                    fflush(stdout);
+                }
                 for(int i = 0; i < threadNum; i ++)
                 {
                     pthread_cond_signal(&threadQueue[i].queueFull);
@@ -295,6 +302,7 @@ void* distribute(void* args)
             }
             if(debug)
             {
+                printf("distributeOver = %d\n", distributeOver);
                 printf("distributT waiting!\n");
                 fflush(stdout);
             }
@@ -339,17 +347,11 @@ void* distribute(void* args)
         pthread_cond_signal(&tmp.queueFull);
         pthread_mutex_unlock(&tmp.queueMutex);
 
-        pthread_cond_signal(&problemEmpty);
         pthread_mutex_unlock(&problemMutex);
     }
     return NULL;
 }
 
-/*
-功能：使用solve_sudoku_dancing_links算法求解数独
-输入：数独问题在全局数组中的位置、编号
-输出：修改全局数组中的各个问题是否被解决标志位
-*/
 void* worker(void* args)
 {
     int id = *(int*)args;
@@ -430,6 +432,11 @@ void* print(void*)
         while(printBegin == problemEnd)     // 已打印最后一个
         {
             pthread_mutex_lock(&distributeOverM);
+            if(debug)
+            {
+                printf("distributeOver = %d\n", distributeOver);
+                fflush(stdout);
+            }
             if(distributeOver)
             {
                 if(debug)
@@ -466,6 +473,9 @@ void* print(void*)
             problemStatus[printBegin] = false;
             printBegin = (printBegin + 1) % problemNum;
         }
+        pthread_mutex_lock(&problemMutex);
+        pthread_cond_signal(&problemEmpty);
+        pthread_mutex_unlock(&problemMutex);
     }
     return NULL;
 }
